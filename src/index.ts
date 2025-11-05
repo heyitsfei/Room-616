@@ -133,55 +133,79 @@ async function processTurn(
 bot.onTip(async (handler, event) => {
     const { channelId, senderAddress, receiverAddress, amount, messageId } = event;
     
-    // Only handle tips to the bot
-    if (receiverAddress !== bot.botId) {
-        return;
-    }
-    
-    // Check if user already has active session
-    const existingSession = getSession(senderAddress);
-    if (existingSession && existingSession.isActive) {
-        await handler.sendMessage(
-            channelId,
-            `You already have an active game! Use \`/status\` to check your progress, or complete your current game first.`
-        );
-        return;
-    }
-    
-    // Create new session from tip
-    const session = createSession(senderAddress, channelId, amount);
-    
-    // Send welcome message and first scene
-    await handler.sendMessage(
-        channelId,
-        `🎮 **Welcome to Room 616**\n\n` +
-        `You've entered the game with a tip of ${amount.toString()} wei.\n` +
-        `Navigate through 10-20 decisions to escape before your number is called...\n\n` +
-        `**Starting your journey...**\n`
-    );
-    
-    // Generate and send first scene
     try {
-        const scene = await generateScene(1, session.state, null);
-        session.state = applyStateChanges(session.state, scene.state_changes);
-        session.actionHistory.push('game_start');
-        lastChoices.set(senderAddress, scene.choices);
         
-        const message = formatScene(scene.scene_text, scene.choices);
-        if (scene.hint) {
-            await handler.sendMessage(channelId, message + `\n\n💡 Hint: ${scene.hint}`);
-        } else {
-            await handler.sendMessage(channelId, message);
+        // Log tip event for debugging
+        console.log('Tip received:', {
+            sender: senderAddress,
+            receiver: receiverAddress,
+            botId: bot.botId,
+            amount: amount.toString(),
+        });
+        
+        // Only handle tips to the bot (case-insensitive comparison)
+        if (receiverAddress.toLowerCase() !== bot.botId.toLowerCase()) {
+            console.log('Tip not to bot, ignoring');
+            return;
         }
         
-        updateSession(senderAddress, { state: session.state, actionHistory: session.actionHistory });
+        // Check if user already has active session
+        const existingSession = getSession(senderAddress);
+        if (existingSession && existingSession.isActive) {
+            await handler.sendMessage(
+                channelId,
+                `You already have an active game! Use \`/status\` to check your progress, or complete your current game first.`
+            );
+            return;
+        }
+        
+        // Create new session from tip
+        const session = createSession(senderAddress, channelId, amount);
+        
+        // Generate first scene first (before sending any messages)
+        try {
+            console.log('Generating first scene for user:', senderAddress);
+            const scene = await generateScene(1, session.state, null);
+            session.state = applyStateChanges(session.state, scene.state_changes);
+            session.actionHistory.push('game_start');
+            lastChoices.set(senderAddress, scene.choices);
+            
+            // Combine welcome message with first scene
+            let welcomeMessage = `🎮 **Welcome to Room 616**\n\n`;
+            welcomeMessage += `You've entered the game with a tip of ${amount.toString()} wei.\n`;
+            welcomeMessage += `Navigate through 10-20 decisions to escape before your number is called...\n\n`;
+            welcomeMessage += `---\n\n`;
+            welcomeMessage += formatScene(scene.scene_text, scene.choices);
+            
+            if (scene.hint) {
+                welcomeMessage += `\n\n💡 Hint: ${scene.hint}`;
+            }
+            
+            // Send combined welcome + first scene message
+            await handler.sendMessage(channelId, welcomeMessage);
+            
+            updateSession(senderAddress, { state: session.state, actionHistory: session.actionHistory });
+            console.log('Game started successfully for user:', senderAddress);
+        } catch (error) {
+            console.error('Error generating first scene:', error);
+            await handler.sendMessage(
+                channelId,
+                `❌ Error starting game: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`
+            );
+            clearSession(senderAddress);
+        }
     } catch (error) {
-        console.error('Error generating first scene:', error);
-        await handler.sendMessage(
-            channelId,
-            `❌ Error starting game. Please try again.`
-        );
-        clearSession(senderAddress);
+        console.error('Error in onTip handler:', error);
+        // Try to send error message if handler is available
+        try {
+            await handler.sendMessage(
+                channelId,
+                `❌ Error processing tip. Please contact support.`
+            );
+        } catch (e) {
+            // Ignore if we can't send message
+            console.error('Could not send error message:', e);
+        }
     }
 })
 

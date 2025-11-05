@@ -20,12 +20,12 @@ STORY PREMISE:
 
 NARRATIVE GOALS:
 - Help the player gradually understand WHO is watching them and WHY they are trapped.
-- Build mystery and reveal clues about the captors' identity and motives throughout the 10-20 turn journey.
+- Build mystery and reveal clues about the captors' identity and motives throughout the 10 turn journey.
 - The story should build toward revealing the nature of the experiment, organization, or entity behind Room 616.
-- By turns 10-15, players should start uncovering significant clues about their captors.
+- By turns 7-10, players should start uncovering significant clues about their captors.
 - The ending should provide resolution about who was watching and why (even if it's a tragic ending).
 
-CRITICAL: Players MUST have 10–20 turns to escape. The game should NOT end before turn 10 unless the player makes a catastrophic choice.
+CRITICAL: Players MUST have exactly 10 turns to escape. The game should NOT end before turn 10 unless the player makes a catastrophic choice.
 
 Each turn, output valid JSON:
   scene_text (≤120 words)
@@ -36,7 +36,7 @@ Each turn, output valid JSON:
 IMPORTANT RULES:
 - time_remaining starts at 12 and decrements by 1 each turn. Do NOT set it to 0 or negative before turn 10.
 - system_access ranges from 0-3. Do NOT set it to 3 before turn 10 (this triggers early ending).
-- The game should progress naturally over 10-20 turns. Keep tension building gradually.
+- The game should progress naturally over 10 turns. Keep tension building gradually.
 - Only apply SMALL deltas to state_changes (e.g., +2, -3, not massive swings).
 - If turn < 10: Keep time_remaining > 0 and system_access < 3 to ensure game continues.
 
@@ -48,10 +48,9 @@ NARRATIVE MEMORY:
 - Gradually reveal information about the captors as the player explores and makes choices.
 
 MYSTERY REVELATION PROGRESSION:
-- Early turns (1-5): Player discovers their situation, explores the room, notices the TV and other rooms.
-- Mid turns (6-10): Player finds clues about the system, maybe hears voices, sees patterns, learns about the experiment.
-- Late turns (11-15): Player uncovers more about WHO is watching - maybe finds evidence, systems, or communications.
-- Final turns (16-20): Player either escapes with knowledge of who/why, or learns the truth even in failure.
+- Early turns (1-3): Player discovers their situation, explores the room, notices the TV and other rooms.
+- Mid turns (4-7): Player finds clues about the system, maybe hears voices, sees patterns, learns about the experiment.
+- Late turns (8-10): Player uncovers more about WHO is watching - maybe finds evidence, systems, or communications. Final turn (10) should provide resolution about who/why, even if escape fails.
 
 When ending is requested (after turn 10 or if player makes catastrophic choice), output:
   ending_id (unique identifier like "E-GLASS-CORRIDOR-07")
@@ -102,11 +101,11 @@ Current player state:
 ${actionHistoryText}
 
 CRITICAL CONSTRAINTS:
-- The game must last 10-20 turns. Current turn is ${turn}.
+- The game must last exactly 10 turns. Current turn is ${turn}.
 - If turn < 10: Keep time_remaining > 0 and system_access < 3 in state_changes.
 - Apply SMALL deltas only (e.g., time_remaining: -1, insight: +5, sanity: -3).
 - Do NOT set time_remaining to 0 or system_access to 3 before turn 10.
-- Build tension gradually over multiple turns.
+- Build tension gradually over the 10 turns.
 
 NARRATIVE REQUIREMENTS:
 ${previousAction ? `- **MOST IMPORTANT**: The scene_text MUST START by showing what happened immediately after the player chose "${previousAction}". Begin with the direct consequence, result, or outcome of that decision. Show what they see, hear, or experience as a result.\n` : ''}- Reference specific previous actions in the scene text. Show consequences of past choices.
@@ -116,10 +115,9 @@ ${previousAction ? `- **MOST IMPORTANT**: The scene_text MUST START by showing w
 
 MYSTERY AND REVELATION:
 - Gradually reveal clues about WHO is watching them and WHY they are trapped.
-- Early turns (1-5): Focus on discovery and exploration of the room and situation.
-- Mid turns (6-10): Introduce clues about the system, patterns, or voices.
-- Late turns (11-15): Reveal more about the captors - evidence, systems, communications.
-- Final turns (16-20): Build toward resolution about who/why, even if escape fails.
+- Early turns (1-3): Focus on discovery and exploration of the room and situation.
+- Mid turns (4-7): Introduce clues about the system, patterns, or voices.
+- Late turns (8-10): Reveal more about the captors - evidence, systems, communications. Final turn (10) should provide resolution about who/why, even if escape fails.
 - The story must help the player understand the nature of their captors by the end.
 
 Return JSON with scene_text, state_changes (apply small deltas to current state), choices (2-4 short imperatives), and optional hint.`;

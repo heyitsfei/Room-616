@@ -124,7 +124,7 @@ function formatScene(sceneText: string, choices: string[]): string {
  */
 function formatStatus(session: NonNullable<ReturnType<typeof getSession>>): string {
     const { state } = session;
-    return `**Game Status** (Turn ${state.turn}/20)\n\n` +
+    return `**Game Status** (Turn ${state.turn}/10)\n\n` +
         `⏰ Time Remaining: ${state.time_remaining}\n` +
         `🤝 Trust: ${state.trust}\n` +
         `🧠 Sanity: ${state.sanity}\n` +
@@ -137,7 +137,7 @@ function formatStatus(session: NonNullable<ReturnType<typeof getSession>>): stri
  * Format player stats compactly for scene display
  */
 function formatStatsCompact(state: PlayerState): string {
-    return `Turn ${state.turn}/20 | ⏰${state.time_remaining} | 🤝${state.trust} | 🧠${state.sanity} | 💡${state.insight} | 🔐${state.system_access}/3 | ⚖️${state.morality}`;
+    return `Turn ${state.turn}/10 | ⏰${state.time_remaining} | 🤝${state.trust} | 🧠${state.sanity} | 💡${state.insight} | 🔐${state.system_access}/3 | ⚖️${state.morality}`;
 }
 
 /**
@@ -164,8 +164,8 @@ async function processTurn(
         session.state = applyStateChanges(session.state, scene.state_changes);
         // Add current action to history after generating scene
         session.actionHistory.push(action);
-        if (session.actionHistory.length > 20) {
-            // Keep last 20 actions for full context (since game can be up to 20 turns)
+        if (session.actionHistory.length > 10) {
+            // Keep last 10 actions for full context (game is 10 turns)
             session.actionHistory.shift();
         }
         
@@ -600,7 +600,7 @@ bot.onSlashCommand('help', async (handler, { channelId }) => {
         '**How to Play:**\n' +
         '1. Use `/start` to begin a game\n' +
         '2. Make choices using `/choose1`, `/choose2`, etc.\n' +
-        '3. Navigate through 10-20 decisions\n' +
+        '3. Navigate through 10 decisions\n' +
         '4. Reach an ending and get your score\n' +
         '5. Highest score wins the prize pool!\n\n' +
         '💡 **Tip:** You can tip the bot to add to the prize pool! Tips are optional but help fund the competition.\n'

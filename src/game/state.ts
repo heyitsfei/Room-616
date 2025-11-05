@@ -74,7 +74,7 @@ export function applyStateChanges(
 
 /**
  * Check if game should end
- * Game must last at least 10 turns, but can end early if player makes catastrophic choice
+ * Game must last exactly 10 turns
  */
 export function shouldEndGame(state: PlayerState): boolean {
     // Must have at least 10 turns
@@ -83,11 +83,11 @@ export function shouldEndGame(state: PlayerState): boolean {
     }
     
     // After turn 10, can end if:
-    // - Reached max turns (20)
+    // - Reached max turns (10)
     // - Time ran out
     // - Achieved full system access
     return (
-        state.turn >= 20 ||
+        state.turn >= 10 ||
         state.time_remaining <= 0 ||
         state.system_access >= 3
     );

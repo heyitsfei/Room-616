@@ -5,7 +5,7 @@ export interface PlayerState {
     insight: number; // 0-100
     system_access: number; // 0-3
     morality: number; // -100 → +100
-    turn: number; // 1-20
+    turn: number; // 1-10
 }
 
 export interface GameSession {

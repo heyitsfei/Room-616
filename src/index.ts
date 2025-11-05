@@ -134,17 +134,19 @@ async function processTurn(
     const { channelId, userId } = session;
     
     try {
-        // Generate next scene
+        // Generate next scene with full action history (before adding current action)
         const scene = await generateScene(
             session.state.turn,
             session.state,
-            action
+            session.actionHistory
         );
         
         // Update state
         session.state = applyStateChanges(session.state, scene.state_changes);
+        // Add current action to history after generating scene
         session.actionHistory.push(action);
-        if (session.actionHistory.length > 10) {
+        if (session.actionHistory.length > 20) {
+            // Keep last 20 actions for full context (since game can be up to 20 turns)
             session.actionHistory.shift();
         }
         
@@ -244,7 +246,7 @@ bot.onTip(async (handler, event) => {
         // Generate first scene
         try {
             console.log('Generating first scene for user:', userId, 'smart account:', senderAddress);
-            const scene = await generateScene(1, session.state, null);
+            const scene = await generateScene(1, session.state, []);
             session.state = applyStateChanges(session.state, scene.state_changes);
             session.actionHistory.push('game_start');
             // Store choices by userId for consistency
@@ -418,7 +420,7 @@ bot.onSlashCommand('start', async (handler, { channelId, userId }) => {
     // Generate first scene
     try {
         console.log('Generating first scene for user:', userId);
-        const scene = await generateScene(1, session.state, null);
+        const scene = await generateScene(1, session.state, []);
         session.state = applyStateChanges(session.state, scene.state_changes);
         session.actionHistory.push('game_start');
         lastChoices.set(userId, scene.choices);

@@ -69,14 +69,20 @@ Always return valid JSON only, no markdown formatting.`;
 export async function generateScene(
     turn: number,
     playerState: PlayerState,
-    actionHistory: string[]
+    actionHistory: string[],
+    previousAction?: string | null
 ): Promise<GPTSceneResponse> {
     // Build action history context
     let actionHistoryText = '';
-    if (actionHistory.length === 0) {
+    if (actionHistory.length === 0 && !previousAction) {
         actionHistoryText = 'This is the first scene. Start with the player waking in the dark room.';
     } else {
-        actionHistoryText = `Complete action history (all decisions made so far):\n${actionHistory.map((action, index) => `Turn ${index + 1}: ${action}`).join('\n')}\n\nMost recent action: ${actionHistory[actionHistory.length - 1]}\n\nIMPORTANT: Incorporate ALL previous decisions into the narrative. Reference things the player investigated, people they trusted, paths they took, objects they interacted with. Make the story feel continuous and responsive to their choices.`;
+        const historyLines = actionHistory.map((action, index) => `Turn ${index + 1}: ${action}`).join('\n');
+        if (previousAction) {
+            actionHistoryText = `Complete action history (all decisions made so far):\n${historyLines}\n\n**MOST RECENT DECISION (just made): ${previousAction}**\n\nCRITICAL: The scene MUST START by showing what happened as a direct result of this decision. Show the immediate consequence, outcome, or result of choosing "${previousAction}". Then continue with the new situation that arises.`;
+        } else {
+            actionHistoryText = `Complete action history (all decisions made so far):\n${historyLines}\n\nMost recent action: ${actionHistory[actionHistory.length - 1]}\n\nIMPORTANT: Incorporate ALL previous decisions into the narrative. Reference things the player investigated, people they trusted, paths they took, objects they interacted with. Make the story feel continuous and responsive to their choices.`;
+        }
     }
     
     const prompt = `Generate the next scene for turn ${turn}.
@@ -103,7 +109,7 @@ CRITICAL CONSTRAINTS:
 - Build tension gradually over multiple turns.
 
 NARRATIVE REQUIREMENTS:
-- Reference specific previous actions in the scene text. Show consequences of past choices.
+${previousAction ? `- **MOST IMPORTANT**: The scene_text MUST START by showing what happened immediately after the player chose "${previousAction}". Begin with the direct consequence, result, or outcome of that decision. Show what they see, hear, or experience as a result.\n` : ''}- Reference specific previous actions in the scene text. Show consequences of past choices.
 - If the player investigated something before, show how that knowledge affects the current situation.
 - If they avoided or chose a different path, acknowledge it in the narrative.
 - Make each scene feel like a continuation of their specific journey.

@@ -151,11 +151,13 @@ async function processTurn(
     const { channelId, userId } = session;
     
     try {
-        // Generate next scene with full action history (before adding current action)
+        // Generate next scene with full action history and the previous action (the choice the user just made)
+        // Pass the action so GPT knows what decision was just made and can start the scene with its result
         const scene = await generateScene(
             session.state.turn,
             session.state,
-            session.actionHistory
+            session.actionHistory,
+            action // Pass the choice the user just made so GPT can start the scene with its result
         );
         
         // Update state
@@ -195,7 +197,7 @@ async function processTurn(
                 }
             }
             
-            endingMessage += `\nUse \`/start\` to play again (requires tip).`;
+            endingMessage += `\nUse \`/start\` to play again.`;
             
             await handler.sendMessage(channelId, endingMessage);
             clearSession(userId);
@@ -278,13 +280,10 @@ bot.onTip(async (handler, event) => {
             // Store choices by userId for consistency
             lastChoices.set(userId, scene.choices);
             
-            // Send welcome message
+            // Send tip confirmation
             await handler.sendMessage(
                 channelId,
-                `🎮 **Welcome to Room 616**\n\n` +
-                `You've entered the game with a tip of ${amount.toString()} wei.\n\n` +
-                `You wake up chained to a chair in a pitch-black hotel room number 616. A flickering CRT TV turns on, showing live footage of other people in identical rooms — all with a number ending in 16. Every hour, one of the rooms goes dark permanently and you hear a scream. Escape before your room number is called.\n\n` +
-                `---\n`
+                `✅ Tip received: ${amount.toString()} wei. Starting your game...`
             );
             
             // Generate image for the first scene (optional, won't break game if it fails)
@@ -460,15 +459,6 @@ bot.onSlashCommand('start', async (handler, { channelId, userId }) => {
         session.actionHistory.push('game_start');
         lastChoices.set(userId, scene.choices);
         
-            // Send welcome message
-            await handler.sendMessage(
-                channelId,
-                `🎮 **Welcome to Room 616**\n\n` +
-                `You wake up chained to a chair in a pitch-black hotel room number 616. A flickering CRT TV turns on, showing live footage of other people in identical rooms — all with a number ending in 16. Every hour, one of the rooms goes dark permanently and you hear a scream. Escape before your room number is called.\n\n` +
-                `💡 Tip: You can tip the bot to add to the prize pool! The highest score wins all tips.\n\n` +
-                `---\n`
-            );
-            
             // Generate image for the first scene (optional, won't break game if it fails)
             let imageUrl: string | undefined = undefined;
             try {

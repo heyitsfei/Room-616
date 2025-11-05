@@ -2,52 +2,340 @@ import { makeTownsBot } from '@towns-protocol/bot'
 import { Hono } from 'hono'
 import { logger } from 'hono/logger'
 import commands from './commands'
+import { generateScene, generateEnding } from './game/gpt'
+import { applyStateChanges, shouldEndGame } from './game/state'
+import { createEndingResult } from './game/scoring'
+import {
+    getSession,
+    createSession,
+    updateSession,
+    endSession,
+    clearSession,
+    getLeaderboard,
+    getCurrentRound,
+    getRoundWinner,
+} from './game/session'
 
 const bot = await makeTownsBot(process.env.APP_PRIVATE_DATA!, process.env.JWT_SECRET!, {
     commands,
 })
 
+// Store last scene choices for each user (for handling /choose commands)
+const lastChoices = new Map<string, string[]>(); // userId -> choices array
+
+/**
+ * Format scene with choices
+ */
+function formatScene(sceneText: string, choices: string[]): string {
+    let message = `**${sceneText}**\n\n`;
+    message += '**Your choices:**\n';
+    choices.forEach((choice, index) => {
+        message += `${index + 1}. ${choice}\n`;
+    });
+    message += `\nUse \`/choose1\`, \`/choose2\`, etc. to make your choice.`;
+    return message;
+}
+
+/**
+ * Format player status
+ */
+function formatStatus(session: NonNullable<ReturnType<typeof getSession>>): string {
+    const { state } = session;
+    return `**Game Status** (Turn ${state.turn}/20)\n\n` +
+        `⏰ Time Remaining: ${state.time_remaining}\n` +
+        `🤝 Trust: ${state.trust}\n` +
+        `🧠 Sanity: ${state.sanity}\n` +
+        `💡 Insight: ${state.insight}\n` +
+        `🔐 System Access: ${state.system_access}/3\n` +
+        `⚖️ Morality: ${state.morality}\n`;
+}
+
+/**
+ * Process game turn
+ */
+async function processTurn(
+    handler: Parameters<Parameters<typeof bot.onSlashCommand>[1]>[0],
+    session: NonNullable<ReturnType<typeof getSession>>,
+    action: string
+) {
+    const { channelId, userId } = session;
+    
+    try {
+        // Generate next scene
+        const scene = await generateScene(
+            session.state.turn,
+            session.state,
+            action
+        );
+        
+        // Update state
+        session.state = applyStateChanges(session.state, scene.state_changes);
+        session.actionHistory.push(action);
+        if (session.actionHistory.length > 10) {
+            session.actionHistory.shift();
+        }
+        
+        // Store choices for this turn
+        lastChoices.set(userId, scene.choices);
+        
+        // Check if game should end
+        if (shouldEndGame(session.state)) {
+            // Generate ending
+            const ending = await generateEnding(session.state, session.actionHistory);
+            const result = createEndingResult(ending, session.state);
+            
+            // End session
+            endSession(userId, ending, result.final_score, result.tier);
+            
+            // Send ending
+            let endingMessage = `**🎭 ${result.ending_title}**\n\n${result.ending_text}\n\n`;
+            endingMessage += `**Final Score:** ${result.final_score} (${result.tier} Tier)\n\n`;
+            
+            // Check if round ended and winner gets prize
+            const round = getCurrentRound();
+            if (!round.isActive && round.completedPlayers.size > 0) {
+                const winner = getRoundWinner(round.roundId);
+                if (winner && winner.userId === userId) {
+                    endingMessage += `🎉 **You won the round!** Prize pool: ${round.prizePool.toString()} wei\n`;
+                    // TODO: Send tip to winner using bot.viem and execute
+                } else if (winner) {
+                    endingMessage += `🏆 Winner: <@${winner.userId}> with score ${winner.result.final_score}\n`;
+                }
+            }
+            
+            endingMessage += `\nUse \`/start\` to play again (requires tip).`;
+            
+            await handler.sendMessage(channelId, endingMessage);
+            clearSession(userId);
+            lastChoices.delete(userId);
+        } else {
+            // Send scene
+            const message = formatScene(scene.scene_text, scene.choices);
+            if (scene.hint) {
+                await handler.sendMessage(channelId, message + `\n\n💡 Hint: ${scene.hint}`);
+            } else {
+                await handler.sendMessage(channelId, message);
+            }
+            
+            // Update session
+            updateSession(userId, { state: session.state, actionHistory: session.actionHistory });
+        }
+    } catch (error) {
+        console.error('Error processing turn:', error);
+        await handler.sendMessage(
+            channelId,
+            `❌ Error processing your turn. Please try again or use \`/start\` to restart.`
+        );
+    }
+}
+
+// Handle tips - check if user wants to start game
+bot.onTip(async (handler, event) => {
+    const { channelId, senderAddress, receiverAddress, amount, messageId } = event;
+    
+    // Only handle tips to the bot
+    if (receiverAddress !== bot.botId) {
+        return;
+    }
+    
+    // Check if user already has active session
+    const existingSession = getSession(senderAddress);
+    if (existingSession && existingSession.isActive) {
+        await handler.sendMessage(
+            channelId,
+            `You already have an active game! Use \`/status\` to check your progress, or complete your current game first.`
+        );
+        return;
+    }
+    
+    // Create new session from tip
+    const session = createSession(senderAddress, channelId, amount);
+    
+    // Send welcome message and first scene
+    await handler.sendMessage(
+        channelId,
+        `🎮 **Welcome to Room 616**\n\n` +
+        `You've entered the game with a tip of ${amount.toString()} wei.\n` +
+        `Navigate through 10-20 decisions to escape before your number is called...\n\n` +
+        `**Starting your journey...**\n`
+    );
+    
+    // Generate and send first scene
+    try {
+        const scene = await generateScene(1, session.state, null);
+        session.state = applyStateChanges(session.state, scene.state_changes);
+        session.actionHistory.push('game_start');
+        lastChoices.set(senderAddress, scene.choices);
+        
+        const message = formatScene(scene.scene_text, scene.choices);
+        if (scene.hint) {
+            await handler.sendMessage(channelId, message + `\n\n💡 Hint: ${scene.hint}`);
+        } else {
+            await handler.sendMessage(channelId, message);
+        }
+        
+        updateSession(senderAddress, { state: session.state, actionHistory: session.actionHistory });
+    } catch (error) {
+        console.error('Error generating first scene:', error);
+        await handler.sendMessage(
+            channelId,
+            `❌ Error starting game. Please try again.`
+        );
+        clearSession(senderAddress);
+    }
+})
+
+// Start command (for users who want to start without tipping first)
+bot.onSlashCommand('start', async (handler, { channelId, userId }) => {
+    const existingSession = getSession(userId);
+    if (existingSession && existingSession.isActive) {
+        await handler.sendMessage(
+            channelId,
+            `You already have an active game! Use \`/status\` to check your progress.\n\n` +
+            formatStatus(existingSession)
+        );
+        return;
+    }
+    
+    await handler.sendMessage(
+        channelId,
+        `🎮 **Room 616**\n\n` +
+        `To start playing, you need to tip this bot. The tip amount will be added to the prize pool.\n` +
+        `The player with the highest score at the end of each round wins all tips!\n\n` +
+        `**How to start:**\n` +
+        `1. Tip this bot (click the tip button on any message)\n` +
+        `2. Your game will begin automatically\n\n` +
+        `**Game Rules:**\n` +
+        `• 10-20 decisions to escape\n` +
+        `• Each ending has a unique score\n` +
+        `• Highest score wins the prize pool\n` +
+        `• Round ends when at least one player finishes\n`
+    );
+})
+
+// Choice commands
+bot.onSlashCommand('choose1', async (handler, { channelId, userId }) => {
+    const session = getSession(userId);
+    if (!session || !session.isActive) {
+        await handler.sendMessage(channelId, `You don't have an active game. Use \`/start\` to begin.`);
+        return;
+    }
+    
+    const choices = lastChoices.get(userId);
+    if (!choices || choices.length < 1) {
+        await handler.sendMessage(channelId, `No choices available. Please wait for the next scene.`);
+        return;
+    }
+    
+    await processTurn(handler, session, choices[0]);
+})
+
+bot.onSlashCommand('choose2', async (handler, { channelId, userId }) => {
+    const session = getSession(userId);
+    if (!session || !session.isActive) {
+        await handler.sendMessage(channelId, `You don't have an active game. Use \`/start\` to begin.`);
+        return;
+    }
+    
+    const choices = lastChoices.get(userId);
+    if (!choices || choices.length < 2) {
+        await handler.sendMessage(channelId, `Choice 2 is not available. Please select a valid option.`);
+        return;
+    }
+    
+    await processTurn(handler, session, choices[1]);
+})
+
+bot.onSlashCommand('choose3', async (handler, { channelId, userId }) => {
+    const session = getSession(userId);
+    if (!session || !session.isActive) {
+        await handler.sendMessage(channelId, `You don't have an active game. Use \`/start\` to begin.`);
+        return;
+    }
+    
+    const choices = lastChoices.get(userId);
+    if (!choices || choices.length < 3) {
+        await handler.sendMessage(channelId, `Choice 3 is not available. Please select a valid option.`);
+        return;
+    }
+    
+    await processTurn(handler, session, choices[2]);
+})
+
+bot.onSlashCommand('choose4', async (handler, { channelId, userId }) => {
+    const session = getSession(userId);
+    if (!session || !session.isActive) {
+        await handler.sendMessage(channelId, `You don't have an active game. Use \`/start\` to begin.`);
+        return;
+    }
+    
+    const choices = lastChoices.get(userId);
+    if (!choices || choices.length < 4) {
+        await handler.sendMessage(channelId, `Choice 4 is not available. Please select a valid option.`);
+        return;
+    }
+    
+    await processTurn(handler, session, choices[3]);
+})
+
+// Status command
+bot.onSlashCommand('status', async (handler, { channelId, userId }) => {
+    const session = getSession(userId);
+    if (!session || !session.isActive) {
+        await handler.sendMessage(channelId, `You don't have an active game. Use \`/start\` to begin.`);
+        return;
+    }
+    
+    await handler.sendMessage(channelId, formatStatus(session));
+})
+
+// Leaderboard command
+bot.onSlashCommand('leaderboard', async (handler, { channelId }) => {
+    const leaderboard = getLeaderboard(10);
+    
+    if (leaderboard.length === 0) {
+        await handler.sendMessage(channelId, `📊 **Leaderboard**\n\nNo players have completed a game yet.`);
+        return;
+    }
+    
+    let message = `📊 **Leaderboard** (Top 10)\n\n`;
+    leaderboard.forEach((entry, index) => {
+        const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+        message += `${medal} <@${entry.wallet}> - Score: ${entry.score} (${entry.tier} Tier)\n`;
+        message += `   Ending: ${entry.ending_id}\n\n`;
+    });
+    
+    const round = getCurrentRound();
+    message += `**Current Round Prize Pool:** ${round.prizePool.toString()} wei\n`;
+    message += `**Active Players:** ${round.activePlayers.size}\n`;
+    message += `**Completed:** ${round.completedPlayers.size}`;
+    
+    await handler.sendMessage(channelId, message);
+})
+
+// Help command
 bot.onSlashCommand('help', async (handler, { channelId }) => {
     await handler.sendMessage(
         channelId,
-        '**Available Commands:**\n\n' +
-            '• `/help` - Show this help message\n' +
-            '• `/time` - Get the current time\n\n' +
-            '**Message Triggers:**\n\n' +
-            "• Mention me - I'll respond\n" +
-            "• React with 👋 - I'll wave back" +
-            '• Say "hello" - I\'ll greet you back\n' +
-            '• Say "ping" - I\'ll show latency\n' +
-            '• Say "react" - I\'ll add a reaction\n',
+        '**🎮 Room 616 - Commands**\n\n' +
+        '**Game Commands:**\n' +
+        '• `/start` - Start a new game (requires tip)\n' +
+        '• `/status` - Check your current game status\n' +
+        '• `/leaderboard` - View the current leaderboard\n\n' +
+        '**Choice Commands:**\n' +
+        '• `/choose1` - Choose option 1\n' +
+        '• `/choose2` - Choose option 2\n' +
+        '• `/choose3` - Choose option 3\n' +
+        '• `/choose4` - Choose option 4\n\n' +
+        '**How to Play:**\n' +
+        '1. Tip the bot to start a game\n' +
+        '2. Make choices using `/choose1`, `/choose2`, etc.\n' +
+        '3. Navigate through 10-20 decisions\n' +
+        '4. Reach an ending and get your score\n' +
+        '5. Highest score wins the prize pool!\n'
     )
 })
 
-bot.onSlashCommand('time', async (handler, { channelId }) => {
-    const currentTime = new Date().toLocaleString()
-    await handler.sendMessage(channelId, `Current time: ${currentTime} ⏰`)
-})
-
-bot.onMessage(async (handler, { message, channelId, eventId, createdAt }) => {
-    if (message.includes('hello')) {
-        await handler.sendMessage(channelId, 'Hello there! 👋')
-        return
-    }
-    if (message.includes('ping')) {
-        const now = new Date()
-        await handler.sendMessage(channelId, `Pong! 🏓 ${now.getTime() - createdAt.getTime()}ms`)
-        return
-    }
-    if (message.includes('react')) {
-        await handler.sendReaction(channelId, eventId, '👍')
-        return
-    }
-})
-
-bot.onReaction(async (handler, { reaction, channelId }) => {
-    if (reaction === '👋') {
-        await handler.sendMessage(channelId, 'I saw your wave! 👋')
-    }
-})
 const { jwtMiddleware, handler } = bot.start()
 
 const app = new Hono()

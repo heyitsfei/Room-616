@@ -1,6 +1,14 @@
+// Load environment variables
+import { config } from 'dotenv'
+config()
+
 import { makeTownsBot } from '@towns-protocol/bot'
 import { Hono } from 'hono'
 import { logger } from 'hono/logger'
+import type { PlainMessage } from '@towns-protocol/proto'
+import type { InteractionRequest_Form, InteractionRequest_Form_Component } from '@towns-protocol/proto'
+import { create } from '@bufbuild/protobuf'
+import { InteractionRequest_FormSchema, InteractionRequest_Form_ComponentSchema, InteractionRequest_Form_Component_ButtonSchema } from '@towns-protocol/proto'
 import commands from './commands'
 import { generateScene, generateEnding } from './game/gpt'
 import { applyStateChanges, shouldEndGame } from './game/state'
@@ -20,11 +28,62 @@ const bot = await makeTownsBot(process.env.APP_PRIVATE_DATA!, process.env.JWT_SE
     commands,
 })
 
-// Store last scene choices for each user (for handling /choose commands)
+// Store last scene choices for each user (for handling /choose commands and button interactions)
 const lastChoices = new Map<string, string[]>(); // userId -> choices array
+const interactionRequestMap = new Map<string, { userId: string; choices: string[] }>(); // requestId -> { userId, choices }
 
 /**
- * Format scene with choices
+ * Format scene with choices as buttons
+ */
+async function sendSceneWithButtons(
+    handler: Parameters<Parameters<typeof bot.onSlashCommand>[1]>[0],
+    channelId: string,
+    sceneText: string,
+    choices: string[],
+    hint?: string,
+    userId?: string
+): Promise<void> {
+    // Create button components
+    const buttonComponents: PlainMessage<InteractionRequest_Form_Component>[] = choices.map((choice, index) => 
+        create(InteractionRequest_Form_ComponentSchema, {
+            id: `choice-${index}`,
+            component: {
+                case: 'button',
+                value: create(InteractionRequest_Form_Component_ButtonSchema, {
+                    label: choice,
+                }),
+            },
+        })
+    );
+
+    // Create the form
+    const formId = `scene-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+    const form: PlainMessage<InteractionRequest_Form> = create(InteractionRequest_FormSchema, {
+        id: formId,
+        title: sceneText,
+        subtitle: hint ? `💡 Hint: ${hint}` : undefined,
+        components: buttonComponents,
+    });
+
+    // Send the scene text first
+    await handler.sendMessage(channelId, `**${sceneText}**${hint ? `\n\n💡 Hint: ${hint}` : ''}\n\n**Choose your action:**`);
+
+    // Send interaction request with buttons
+    const { eventId } = await handler.sendInteractionRequest(channelId, {
+        content: {
+            case: 'form',
+            value: form,
+        },
+    } as any);
+
+    // Store the mapping for handling responses
+    if (userId) {
+        interactionRequestMap.set(formId, { userId, choices });
+    }
+}
+
+/**
+ * Format scene with choices (fallback text format)
  */
 function formatScene(sceneText: string, choices: string[]): string {
     let message = `**${sceneText}**\n\n`;
@@ -109,13 +168,8 @@ async function processTurn(
             clearSession(userId);
             lastChoices.delete(userId);
         } else {
-            // Send scene
-            const message = formatScene(scene.scene_text, scene.choices);
-            if (scene.hint) {
-                await handler.sendMessage(channelId, message + `\n\n💡 Hint: ${scene.hint}`);
-            } else {
-                await handler.sendMessage(channelId, message);
-            }
+            // Send scene with buttons
+            await sendSceneWithButtons(handler, channelId, scene.scene_text, scene.choices, scene.hint, userId);
             
             // Update session
             updateSession(userId, { state: session.state, actionHistory: session.actionHistory });
@@ -182,19 +236,17 @@ bot.onTip(async (handler, event) => {
             // Store choices by userId for consistency
             lastChoices.set(userId, scene.choices);
             
-            // Combine welcome message with first scene
-            let welcomeMessage = `🎮 **Welcome to Room 616**\n\n`;
-            welcomeMessage += `You've entered the game with a tip of ${amount.toString()} wei.\n`;
-            welcomeMessage += `Navigate through 10-20 decisions to escape before your number is called...\n\n`;
-            welcomeMessage += `---\n\n`;
-            welcomeMessage += formatScene(scene.scene_text, scene.choices);
+            // Send welcome message
+            await handler.sendMessage(
+                channelId,
+                `🎮 **Welcome to Room 616**\n\n` +
+                `You've entered the game with a tip of ${amount.toString()} wei.\n` +
+                `Navigate through 10-20 decisions to escape before your number is called...\n\n` +
+                `---\n`
+            );
             
-            if (scene.hint) {
-                welcomeMessage += `\n\n💡 Hint: ${scene.hint}`;
-            }
-            
-            // Send combined welcome + first scene message
-            await handler.sendMessage(channelId, welcomeMessage);
+            // Send first scene with buttons
+            await sendSceneWithButtons(handler, channelId, scene.scene_text, scene.choices, scene.hint, userId);
             
             updateSession(userId, { state: session.state, actionHistory: session.actionHistory });
             console.log('Game started successfully for user:', userId, 'smart account:', senderAddress);
@@ -219,6 +271,66 @@ bot.onTip(async (handler, event) => {
             console.error('Could not send error message:', e);
         }
     }
+})
+
+// Handle interaction responses (button clicks)
+bot.onInteractionResponse(async (handler, event) => {
+    const { userId, channelId, response } = event;
+    const { payload } = response;
+    
+    // Check if this is a form response
+    if (payload.content.case !== 'form') {
+        return;
+    }
+    
+    const formResponse = payload.content.value;
+    const requestId = formResponse.requestId;
+    
+    // Find the interaction request in our map
+    const interactionData = interactionRequestMap.get(requestId);
+    if (!interactionData) {
+        console.log('Interaction request not found:', requestId);
+        return;
+    }
+    
+    // Verify this is the correct user
+    if (interactionData.userId !== userId) {
+        await handler.sendMessage(channelId, `❌ This interaction belongs to another user.`);
+        return;
+    }
+    
+    // Get the session
+    const session = getSession(userId);
+    if (!session || !session.isActive) {
+        await handler.sendMessage(channelId, `You don't have an active game. Use \`/start\` to begin.`);
+        return;
+    }
+    
+    // Find which button was clicked
+    const clickedComponent = formResponse.components.find((comp: { id: string; component?: { case?: string } }) => 
+        comp.component?.case === 'button'
+    );
+    
+    if (!clickedComponent) {
+        await handler.sendMessage(channelId, `❌ Invalid button selection.`);
+        return;
+    }
+    
+    // Get the choice index from component ID (e.g., "choice-0" -> 0)
+    const choiceIndex = parseInt(clickedComponent.id.replace('choice-', ''));
+    if (isNaN(choiceIndex) || choiceIndex < 0 || choiceIndex >= interactionData.choices.length) {
+        await handler.sendMessage(channelId, `❌ Invalid choice index.`);
+        return;
+    }
+    
+    // Get the selected choice
+    const selectedChoice = interactionData.choices[choiceIndex];
+    
+    // Remove from interaction map
+    interactionRequestMap.delete(requestId);
+    
+    // Process the turn with the selected choice
+    await processTurn(handler, session, selectedChoice);
 })
 
 // Start command - start the game directly
@@ -251,19 +363,17 @@ bot.onSlashCommand('start', async (handler, { channelId, userId }) => {
         session.actionHistory.push('game_start');
         lastChoices.set(userId, scene.choices);
         
-        // Combine welcome message with first scene
-        let welcomeMessage = `🎮 **Welcome to Room 616**\n\n`;
-        welcomeMessage += `Navigate through 10-20 decisions to escape before your number is called...\n\n`;
-        welcomeMessage += `💡 Tip: You can tip the bot to add to the prize pool! The highest score wins all tips.\n\n`;
-        welcomeMessage += `---\n\n`;
-        welcomeMessage += formatScene(scene.scene_text, scene.choices);
-        
-        if (scene.hint) {
-            welcomeMessage += `\n\n💡 Hint: ${scene.hint}`;
-        }
-        
-        // Send combined welcome + first scene message
-        await handler.sendMessage(channelId, welcomeMessage);
+            // Send welcome message
+            await handler.sendMessage(
+                channelId,
+                `🎮 **Welcome to Room 616**\n\n` +
+                `Navigate through 10-20 decisions to escape before your number is called...\n\n` +
+                `💡 Tip: You can tip the bot to add to the prize pool! The highest score wins all tips.\n\n` +
+                `---\n`
+            );
+            
+            // Send first scene with buttons
+            await sendSceneWithButtons(handler, channelId, scene.scene_text, scene.choices, scene.hint, userId);
         
         updateSession(userId, { state: session.state, actionHistory: session.actionHistory });
         console.log('Game started successfully for user:', userId);

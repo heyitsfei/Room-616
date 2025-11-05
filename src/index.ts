@@ -65,10 +65,7 @@ async function sendSceneWithButtons(
         components: buttonComponents,
     });
 
-    // Send the scene text first
-    await handler.sendMessage(channelId, `**${sceneText}**${hint ? `\n\n💡 Hint: ${hint}` : ''}\n\n**Choose your action:**`);
-
-    // Send interaction request with buttons
+    // Send interaction request with buttons (form title displays the scene text)
     const { eventId } = await handler.sendInteractionRequest(channelId, {
         content: {
             case: 'form',
@@ -275,62 +272,87 @@ bot.onTip(async (handler, event) => {
 
 // Handle interaction responses (button clicks)
 bot.onInteractionResponse(async (handler, event) => {
-    const { userId, channelId, response } = event;
-    const { payload } = response;
-    
-    // Check if this is a form response
-    if (payload.content.case !== 'form') {
-        return;
+    try {
+        const { userId, channelId, response } = event;
+        const { payload } = response;
+        
+        console.log('Interaction response received:', {
+            userId,
+            payloadCase: payload.content?.case,
+            hasForm: payload.content?.case === 'form',
+        });
+        
+        // Check if this is a form response
+        if (payload.content.case !== 'form') {
+            console.log('Not a form response, ignoring');
+            return;
+        }
+        
+        const formResponse = payload.content.value;
+        const requestId = formResponse.requestId;
+        
+        console.log('Form response requestId:', requestId);
+        console.log('Available requestIds in map:', Array.from(interactionRequestMap.keys()));
+        
+        // Find the interaction request in our map
+        const interactionData = interactionRequestMap.get(requestId);
+        if (!interactionData) {
+            console.log('Interaction request not found for requestId:', requestId);
+            await handler.sendMessage(channelId, `❌ Could not find interaction data. Please try using /choose commands instead.`);
+            return;
+        }
+        
+        // Verify this is the correct user
+        if (interactionData.userId !== userId) {
+            await handler.sendMessage(channelId, `❌ This interaction belongs to another user.`);
+            return;
+        }
+        
+        // Get the session
+        const session = getSession(userId);
+        if (!session || !session.isActive) {
+            await handler.sendMessage(channelId, `You don't have an active game. Use \`/start\` to begin.`);
+            return;
+        }
+        
+        // Find which button was clicked
+        const clickedComponent = formResponse.components.find((comp: { id: string; component?: { case?: string } }) => 
+            comp.component?.case === 'button'
+        );
+        
+        if (!clickedComponent) {
+            await handler.sendMessage(channelId, `❌ Invalid button selection.`);
+            return;
+        }
+        
+        // Get the choice index from component ID (e.g., "choice-0" -> 0)
+        const choiceIndex = parseInt(clickedComponent.id.replace('choice-', ''));
+        if (isNaN(choiceIndex) || choiceIndex < 0 || choiceIndex >= interactionData.choices.length) {
+            await handler.sendMessage(channelId, `❌ Invalid choice index.`);
+            return;
+        }
+        
+        // Get the selected choice
+        const selectedChoice = interactionData.choices[choiceIndex];
+        
+        // Remove from interaction map
+        interactionRequestMap.delete(requestId);
+        
+        console.log('Processing turn with choice:', selectedChoice);
+        
+        // Process the turn with the selected choice
+        await processTurn(handler, session, selectedChoice);
+    } catch (error) {
+        console.error('Error in onInteractionResponse handler:', error);
+        try {
+            await handler.sendMessage(
+                event.channelId,
+                `❌ Error processing button click: ${error instanceof Error ? error.message : 'Unknown error'}. Please try using /choose commands.`
+            );
+        } catch (e) {
+            console.error('Could not send error message:', e);
+        }
     }
-    
-    const formResponse = payload.content.value;
-    const requestId = formResponse.requestId;
-    
-    // Find the interaction request in our map
-    const interactionData = interactionRequestMap.get(requestId);
-    if (!interactionData) {
-        console.log('Interaction request not found:', requestId);
-        return;
-    }
-    
-    // Verify this is the correct user
-    if (interactionData.userId !== userId) {
-        await handler.sendMessage(channelId, `❌ This interaction belongs to another user.`);
-        return;
-    }
-    
-    // Get the session
-    const session = getSession(userId);
-    if (!session || !session.isActive) {
-        await handler.sendMessage(channelId, `You don't have an active game. Use \`/start\` to begin.`);
-        return;
-    }
-    
-    // Find which button was clicked
-    const clickedComponent = formResponse.components.find((comp: { id: string; component?: { case?: string } }) => 
-        comp.component?.case === 'button'
-    );
-    
-    if (!clickedComponent) {
-        await handler.sendMessage(channelId, `❌ Invalid button selection.`);
-        return;
-    }
-    
-    // Get the choice index from component ID (e.g., "choice-0" -> 0)
-    const choiceIndex = parseInt(clickedComponent.id.replace('choice-', ''));
-    if (isNaN(choiceIndex) || choiceIndex < 0 || choiceIndex >= interactionData.choices.length) {
-        await handler.sendMessage(channelId, `❌ Invalid choice index.`);
-        return;
-    }
-    
-    // Get the selected choice
-    const selectedChoice = interactionData.choices[choiceIndex];
-    
-    // Remove from interaction map
-    interactionRequestMap.delete(requestId);
-    
-    // Process the turn with the selected choice
-    await processTurn(handler, session, selectedChoice);
 })
 
 // Start command - start the game directly

@@ -54,7 +54,7 @@ export function createSession(
     userId: string,
     smartAccountAddress: string,
     channelId: string,
-    tipAmount: bigint,
+    tipAmount: bigint = 0n,
     displayName?: string
 ): GameSession {
     const sessionId = `sess-${userId}-${Date.now()}`;
@@ -75,10 +75,12 @@ export function createSession(
     activeSessions.set(userId, session);
     activeSessions.set(smartAccountAddress.toLowerCase(), session);
     
-    // Add to current round
+    // Add to current round (only add to prize pool if tipAmount > 0)
     const round = getCurrentRound();
     round.activePlayers.add(userId);
-    round.prizePool += tipAmount;
+    if (tipAmount > 0n) {
+        round.prizePool += tipAmount;
+    }
     
     return session;
 }

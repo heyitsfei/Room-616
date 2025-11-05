@@ -153,9 +153,13 @@ bot.onTip(async (handler, event) => {
         // Check if user already has active session (by userId or smartAccountAddress)
         const existingSession = getSession(userId) || getSession(senderAddress);
         if (existingSession && existingSession.isActive) {
+            // User already has a game - just add tip to prize pool
+            const round = getCurrentRound();
+            round.prizePool += amount;
             await handler.sendMessage(
                 channelId,
-                `You already have an active game! Use \`/status\` to check your progress, or complete your current game first.`
+                `✅ Tip received! Your ${amount.toString()} wei has been added to the prize pool.\n` +
+                `Continue playing your current game with \`/choose1\`, \`/choose2\`, etc.`
             );
             return;
         }
@@ -217,7 +221,7 @@ bot.onTip(async (handler, event) => {
     }
 })
 
-// Start command (for users who want to start without tipping first)
+// Start command - start the game directly
 bot.onSlashCommand('start', async (handler, { channelId, userId }) => {
     const existingSession = getSession(userId);
     if (existingSession && existingSession.isActive) {
@@ -229,20 +233,48 @@ bot.onSlashCommand('start', async (handler, { channelId, userId }) => {
         return;
     }
     
+    // Create new session without tip (tipAmount = 0)
+    // Use userId as both userId and smartAccountAddress since we don't have tip info
+    const session = createSession(userId, userId, channelId, 0n);
+    
+    // Send immediate confirmation
     await handler.sendMessage(
         channelId,
-        `🎮 **Room 616**\n\n` +
-        `To start playing, you need to tip this bot. The tip amount will be added to the prize pool.\n` +
-        `The player with the highest score at the end of each round wins all tips!\n\n` +
-        `**How to start:**\n` +
-        `1. Tip this bot (click the tip button on any message)\n` +
-        `2. Your game will begin automatically\n\n` +
-        `**Game Rules:**\n` +
-        `• 10-20 decisions to escape\n` +
-        `• Each ending has a unique score\n` +
-        `• Highest score wins the prize pool\n` +
-        `• Round ends when at least one player finishes\n`
+        `✅ Starting your game...`
     );
+    
+    // Generate first scene
+    try {
+        console.log('Generating first scene for user:', userId);
+        const scene = await generateScene(1, session.state, null);
+        session.state = applyStateChanges(session.state, scene.state_changes);
+        session.actionHistory.push('game_start');
+        lastChoices.set(userId, scene.choices);
+        
+        // Combine welcome message with first scene
+        let welcomeMessage = `🎮 **Welcome to Room 616**\n\n`;
+        welcomeMessage += `Navigate through 10-20 decisions to escape before your number is called...\n\n`;
+        welcomeMessage += `💡 Tip: You can tip the bot to add to the prize pool! The highest score wins all tips.\n\n`;
+        welcomeMessage += `---\n\n`;
+        welcomeMessage += formatScene(scene.scene_text, scene.choices);
+        
+        if (scene.hint) {
+            welcomeMessage += `\n\n💡 Hint: ${scene.hint}`;
+        }
+        
+        // Send combined welcome + first scene message
+        await handler.sendMessage(channelId, welcomeMessage);
+        
+        updateSession(userId, { state: session.state, actionHistory: session.actionHistory });
+        console.log('Game started successfully for user:', userId);
+    } catch (error) {
+        console.error('Error generating first scene:', error);
+        await handler.sendMessage(
+            channelId,
+            `❌ Error starting game: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`
+        );
+        clearSession(userId);
+    }
 })
 
 // Choice commands
@@ -351,7 +383,7 @@ bot.onSlashCommand('help', async (handler, { channelId }) => {
         channelId,
         '**🎮 Room 616 - Commands**\n\n' +
         '**Game Commands:**\n' +
-        '• `/start` - Start a new game (requires tip)\n' +
+        '• `/start` - Start a new game\n' +
         '• `/status` - Check your current game status\n' +
         '• `/leaderboard` - View the current leaderboard\n\n' +
         '**Choice Commands:**\n' +
@@ -360,11 +392,12 @@ bot.onSlashCommand('help', async (handler, { channelId }) => {
         '• `/choose3` - Choose option 3\n' +
         '• `/choose4` - Choose option 4\n\n' +
         '**How to Play:**\n' +
-        '1. Tip the bot to start a game\n' +
+        '1. Use `/start` to begin a game\n' +
         '2. Make choices using `/choose1`, `/choose2`, etc.\n' +
         '3. Navigate through 10-20 decisions\n' +
         '4. Reach an ending and get your score\n' +
-        '5. Highest score wins the prize pool!\n'
+        '5. Highest score wins the prize pool!\n\n' +
+        '💡 **Tip:** You can tip the bot to add to the prize pool! Tips are optional but help fund the competition.\n'
     )
 })
 

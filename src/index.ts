@@ -131,13 +131,14 @@ async function processTurn(
 
 // Handle tips - check if user wants to start game
 bot.onTip(async (handler, event) => {
-    const { channelId, senderAddress, receiverAddress, amount, messageId } = event;
+    const { channelId, userId, senderAddress, receiverAddress, amount, messageId } = event;
     
     try {
         
-        // Log tip event for debugging
+        // Log tip event for debugging with user identification
         console.log('Tip received:', {
-            sender: senderAddress,
+            userId: userId, // User's identity address
+            senderAddress: senderAddress, // Smart contract address
             receiver: receiverAddress,
             botId: bot.botId,
             amount: amount.toString(),
@@ -149,8 +150,8 @@ bot.onTip(async (handler, event) => {
             return;
         }
         
-        // Check if user already has active session
-        const existingSession = getSession(senderAddress);
+        // Check if user already has active session (by userId or smartAccountAddress)
+        const existingSession = getSession(userId) || getSession(senderAddress);
         if (existingSession && existingSession.isActive) {
             await handler.sendMessage(
                 channelId,
@@ -159,16 +160,23 @@ bot.onTip(async (handler, event) => {
             return;
         }
         
-        // Create new session from tip
-        const session = createSession(senderAddress, channelId, amount);
+        // Create new session from tip - link userId and smartAccountAddress
+        const session = createSession(userId, senderAddress, channelId, amount);
         
-        // Generate first scene first (before sending any messages)
+        // Send immediate confirmation that tip was received with account linkage
+        await handler.sendMessage(
+            channelId,
+            `✅ Tip received from <@${userId}>! Smart account: \`${senderAddress}\`\nStarting your game...`
+        );
+        
+        // Generate first scene
         try {
-            console.log('Generating first scene for user:', senderAddress);
+            console.log('Generating first scene for user:', userId, 'smart account:', senderAddress);
             const scene = await generateScene(1, session.state, null);
             session.state = applyStateChanges(session.state, scene.state_changes);
             session.actionHistory.push('game_start');
-            lastChoices.set(senderAddress, scene.choices);
+            // Store choices by userId for consistency
+            lastChoices.set(userId, scene.choices);
             
             // Combine welcome message with first scene
             let welcomeMessage = `🎮 **Welcome to Room 616**\n\n`;
@@ -184,15 +192,15 @@ bot.onTip(async (handler, event) => {
             // Send combined welcome + first scene message
             await handler.sendMessage(channelId, welcomeMessage);
             
-            updateSession(senderAddress, { state: session.state, actionHistory: session.actionHistory });
-            console.log('Game started successfully for user:', senderAddress);
+            updateSession(userId, { state: session.state, actionHistory: session.actionHistory });
+            console.log('Game started successfully for user:', userId, 'smart account:', senderAddress);
         } catch (error) {
             console.error('Error generating first scene:', error);
             await handler.sendMessage(
                 channelId,
                 `❌ Error starting game: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`
             );
-            clearSession(senderAddress);
+            clearSession(userId);
         }
     } catch (error) {
         console.error('Error in onTip handler:', error);

@@ -40,10 +40,11 @@ export function getCurrentRound(): RoundState {
 }
 
 /**
- * Get active session for user
+ * Get active session for user (by userId or smartAccountAddress)
  */
-export function getSession(userId: string): GameSession | undefined {
-    return activeSessions.get(userId);
+export function getSession(identifier: string): GameSession | undefined {
+    // Try userId first, then smartAccountAddress (case-insensitive)
+    return activeSessions.get(identifier) || activeSessions.get(identifier.toLowerCase());
 }
 
 /**
@@ -51,13 +52,17 @@ export function getSession(userId: string): GameSession | undefined {
  */
 export function createSession(
     userId: string,
+    smartAccountAddress: string,
     channelId: string,
-    tipAmount: bigint
+    tipAmount: bigint,
+    displayName?: string
 ): GameSession {
     const sessionId = `sess-${userId}-${Date.now()}`;
     const session: GameSession = {
         sessionId,
         userId,
+        smartAccountAddress,
+        displayName,
         channelId,
         state: createInitialState(),
         startedAt: new Date(),
@@ -66,7 +71,9 @@ export function createSession(
         isActive: true,
     };
     
+    // Store session by both userId and smartAccountAddress for lookups
     activeSessions.set(userId, session);
+    activeSessions.set(smartAccountAddress.toLowerCase(), session);
     
     // Add to current round
     const round = getCurrentRound();
@@ -163,9 +170,18 @@ export function getRoundWinner(roundId: string): { userId: string; result: Endin
 }
 
 /**
- * Clear completed session
+ * Clear completed session (by userId or smartAccountAddress)
  */
-export function clearSession(userId: string): void {
-    activeSessions.delete(userId);
+export function clearSession(identifier: string): void {
+    const session = getSession(identifier);
+    if (session) {
+        // Remove from both userId and smartAccountAddress lookups
+        activeSessions.delete(session.userId);
+        activeSessions.delete(session.smartAccountAddress.toLowerCase());
+    } else {
+        // Fallback: try direct deletion
+        activeSessions.delete(identifier);
+        activeSessions.delete(identifier.toLowerCase());
+    }
 }
 

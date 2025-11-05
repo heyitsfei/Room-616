@@ -10,7 +10,9 @@ export interface PlayerState {
 
 export interface GameSession {
     sessionId: string;
-    userId: string;
+    userId: string; // User's identity address (from basePayload)
+    smartAccountAddress: string; // User's smart contract address (senderAddress)
+    displayName?: string; // User's display name if available
     channelId: string;
     state: PlayerState;
     startedAt: Date;

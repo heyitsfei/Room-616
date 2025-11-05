@@ -6,9 +6,6 @@ import { makeTownsBot } from '@towns-protocol/bot'
 import { Hono } from 'hono'
 import { logger } from 'hono/logger'
 import type { PlainMessage } from '@towns-protocol/proto'
-import type { InteractionRequest_Form, InteractionRequest_Form_Component } from '@towns-protocol/proto'
-import { create } from '@bufbuild/protobuf'
-import { InteractionRequest_FormSchema, InteractionRequest_Form_ComponentSchema, InteractionRequest_Form_Component_ButtonSchema } from '@towns-protocol/proto'
 import commands from './commands'
 import { generateScene, generateEnding } from './game/gpt'
 import { applyStateChanges, shouldEndGame } from './game/state'
@@ -45,19 +42,6 @@ async function sendSceneWithButtons(
     userId?: string,
     playerState?: PlayerState
 ): Promise<void> {
-    // Create button components
-    const buttonComponents: PlainMessage<InteractionRequest_Form_Component>[] = choices.map((choice, index) => 
-        create(InteractionRequest_Form_ComponentSchema, {
-            id: `choice-${index}`,
-            component: {
-                case: 'button',
-                value: create(InteractionRequest_Form_Component_ButtonSchema, {
-                    label: choice,
-                }),
-            },
-        })
-    );
-
     // Build subtitle with stats and hint
     let subtitleParts: string[] = [];
     if (playerState) {
@@ -67,14 +51,26 @@ async function sendSceneWithButtons(
         subtitleParts.push(`💡 Hint: ${hint}`);
     }
 
-    // Create the form
-    const formId = `scene-${Date.now()}-${Math.random().toString(36).substring(7)}`;
-    const form: PlainMessage<InteractionRequest_Form> = create(InteractionRequest_FormSchema, {
+    // Create the form with plain objects (matching the example pattern)
+    const formId = `scene-${userId}-${Date.now()}`;
+    
+    // Create button components as plain objects
+    const buttonComponents = choices.map((choice, index) => ({
+        id: `choice-${index}`,
+        component: {
+            case: 'button' as const,
+            value: {
+                label: choice,
+            },
+        },
+    }));
+
+    const form = {
         id: formId,
         title: sceneText,
         subtitle: subtitleParts.length > 0 ? subtitleParts.join('\n\n') : undefined,
         components: buttonComponents,
-    });
+    };
 
     // Send interaction request with buttons (form title displays the scene text)
     const { eventId } = await handler.sendInteractionRequest(channelId, {
@@ -295,28 +291,28 @@ bot.onTip(async (handler, event) => {
 bot.onInteractionResponse(async (handler, event) => {
     try {
         const { userId, channelId, response } = event;
-        const { payload } = response;
         
         console.log('Interaction response received:', {
             userId,
-            payloadCase: payload.content?.case,
-            hasForm: payload.content?.case === 'form',
+            hasResponse: !!response,
+            hasPayload: !!response?.payload,
+            payloadContentCase: response?.payload?.content?.case,
         });
         
-        // Check if this is a form response
-        if (payload.content.case !== 'form') {
+        // Check if it's a form response (using optional chaining like the example)
+        if (response.payload.content?.case !== 'form') {
             console.log('Not a form response, ignoring');
             return;
         }
         
-        const formResponse = payload.content.value;
+        const formResponse = response.payload.content.value;
         const requestId = formResponse.requestId;
         
         console.log('Form response received:', {
             requestId,
             userId,
-            componentsCount: formResponse.components.length,
-            availableKeys: Array.from(interactionRequestMap.keys()).slice(0, 10), // First 10 for logging
+            componentsCount: formResponse.components?.length || 0,
+            availableKeys: Array.from(interactionRequestMap.keys()).slice(0, 10),
         });
         
         // Find the interaction request in our map
@@ -355,25 +351,27 @@ bot.onInteractionResponse(async (handler, event) => {
             return;
         }
         
-        // Find which button was clicked
-        const clickedComponent = formResponse.components.find((comp: { id: string; component?: { case?: string } }) => 
-            comp.component?.case === 'button'
-        );
+        // Check which button was clicked (iterate through all components like the example)
+        let selectedChoice: string | null = null;
+        for (const component of formResponse.components || []) {
+            if (component.component?.case === 'button') {
+                const componentId = component.id;
+                console.log('Button clicked:', componentId);
+                
+                // Get the choice index from component ID (e.g., "choice-0" -> 0)
+                const choiceIndex = parseInt(componentId.replace('choice-', ''));
+                if (!isNaN(choiceIndex) && choiceIndex >= 0 && choiceIndex < interactionData.choices.length) {
+                    selectedChoice = interactionData.choices[choiceIndex];
+                    console.log('Selected choice:', selectedChoice);
+                    break;
+                }
+            }
+        }
         
-        if (!clickedComponent) {
+        if (!selectedChoice) {
             await handler.sendMessage(channelId, `❌ Invalid button selection.`);
             return;
         }
-        
-        // Get the choice index from component ID (e.g., "choice-0" -> 0)
-        const choiceIndex = parseInt(clickedComponent.id.replace('choice-', ''));
-        if (isNaN(choiceIndex) || choiceIndex < 0 || choiceIndex >= interactionData.choices.length) {
-            await handler.sendMessage(channelId, `❌ Invalid choice index.`);
-            return;
-        }
-        
-        // Get the selected choice
-        const selectedChoice = interactionData.choices[choiceIndex];
         
         // Remove from interaction map
         interactionRequestMap.delete(requestId);

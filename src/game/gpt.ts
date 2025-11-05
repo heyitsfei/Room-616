@@ -1,10 +1,16 @@
 import type { PlayerState, GPTSceneResponse, GPTEndingResponse } from './types';
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const GPT_MODEL = process.env.GPT_MODEL || 'gpt-4o'; // Use gpt-4o as default, can be overridden
 
-if (!OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY environment variable is required');
+/**
+ * Get OpenAI API key with validation
+ */
+function getOpenAIApiKey(): string {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+        throw new Error('OPENAI_API_KEY environment variable is required. Please set it in your .env file.');
+    }
+    return apiKey;
 }
 
 const SYSTEM_PROMPT = `You are the narrative engine for a thriller game called "Room 616".
@@ -50,10 +56,12 @@ ${previousAction ? `Previous action: ${previousAction}` : 'This is the first sce
 
 Return JSON with scene_text, state_changes (apply deltas to current state), choices (2-4 short imperatives), and optional hint.`;
 
+    const apiKey = getOpenAIApiKey();
+    
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
-            'Authorization': `Bearer ${OPENAI_API_KEY}`,
+            'Authorization': `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -108,10 +116,12 @@ Last 10 actions: ${actionHistory.slice(-10).join(', ')}
 
 Return JSON with ending_id (unique like "E-GLASS-CORRIDOR-07"), ending_title, ending_text (80-180 words), and proposed_score (0-600).`;
 
+    const apiKey = getOpenAIApiKey();
+    
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
-            'Authorization': `Bearer ${OPENAI_API_KEY}`,
+            'Authorization': `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({

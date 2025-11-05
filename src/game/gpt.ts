@@ -157,6 +157,65 @@ Return JSON with scene_text, state_changes (apply small deltas to current state)
 }
 
 /**
+ * Generate an image for a scene using DALL-E
+ */
+export async function generateSceneImage(
+    sceneText: string,
+    turn: number,
+    actionHistory: string[]
+): Promise<string | null> {
+    try {
+        const apiKey = getOpenAIApiKey();
+        
+        // Create a prompt for image generation based on the scene
+        let imagePrompt = `A cinematic thriller scene: ${sceneText}`;
+        
+        // Add context about Room 616 if it's the first scene
+        if (turn === 1) {
+            imagePrompt = `A dark thriller scene: A person chained to a chair in a pitch-black hotel room number 616. A flickering CRT TV shows live footage of other people in identical rooms. Dark, tense, cinematic atmosphere.`;
+        } else if (actionHistory.length > 0) {
+            // Add context from recent actions
+            const recentContext = actionHistory.slice(-3).join(', ');
+            imagePrompt = `A cinematic thriller scene from Room 616: ${sceneText}. Context: ${recentContext}. Dark, tense, atmospheric, thriller style.`;
+        }
+        
+        const response = await fetch('https://api.openai.com/v1/images/generations', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                model: 'dall-e-3',
+                prompt: imagePrompt,
+                n: 1,
+                size: '1024x1024', // DALL-E 3 supports 1024x1024, 1792x1024, or 1024x1792
+                quality: 'standard', // or 'hd' for higher quality (costs more)
+            }),
+        });
+
+        if (!response.ok) {
+            const error = await response.text();
+            console.error(`DALL-E API error: ${response.status} - ${error}`);
+            return null; // Return null on error, don't break the game
+        }
+
+        const data = await response.json();
+        const imageUrl = data.data?.[0]?.url;
+        
+        if (!imageUrl) {
+            console.error('No image URL in DALL-E response');
+            return null;
+        }
+
+        return imageUrl;
+    } catch (error) {
+        console.error('Error generating scene image:', error);
+        return null; // Don't break the game if image generation fails
+    }
+}
+
+/**
  * Generate ending using GPT
  */
 export async function generateEnding(

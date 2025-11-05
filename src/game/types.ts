@@ -28,6 +28,7 @@ export interface GPTSceneResponse {
     state_changes: Partial<PlayerState>;
     choices: string[];
     hint?: string;
+    image_url?: string; // Optional image URL if generated
 }
 
 export interface GPTEndingResponse {

@@ -7,7 +7,7 @@ import { Hono } from 'hono'
 import { logger } from 'hono/logger'
 import type { PlainMessage } from '@towns-protocol/proto'
 import commands from './commands'
-import { generateScene, generateEnding } from './game/gpt'
+import { generateScene, generateEnding, generateSceneImage } from './game/gpt'
 import { applyStateChanges, shouldEndGame } from './game/state'
 import { createEndingResult } from './game/scoring'
 import type { PlayerState } from './game/types'
@@ -40,8 +40,25 @@ async function sendSceneWithButtons(
     choices: string[],
     hint?: string,
     userId?: string,
-    playerState?: PlayerState
+    playerState?: PlayerState,
+    imageUrl?: string
 ): Promise<void> {
+    // If we have an image, send it first as a separate message
+    if (imageUrl) {
+        try {
+            await handler.sendMessage(channelId, '', {
+                attachments: [{
+                    type: 'image',
+                    url: imageUrl,
+                    alt: `Scene from Room 616`
+                }]
+            });
+        } catch (error) {
+            console.error('Error sending scene image:', error);
+            // Continue even if image fails
+        }
+    }
+
     // Build subtitle with stats and hint
     let subtitleParts: string[] = [];
     if (playerState) {
@@ -184,8 +201,17 @@ async function processTurn(
             clearSession(userId);
             lastChoices.delete(userId);
         } else {
+            // Generate image for the scene (optional, won't break game if it fails)
+            let imageUrl: string | undefined = undefined;
+            try {
+                imageUrl = await generateSceneImage(scene.scene_text, session.state.turn, session.actionHistory) || undefined;
+            } catch (error) {
+                console.error('Error generating scene image:', error);
+                // Continue without image
+            }
+            
             // Send scene with buttons (include updated state after scene generation)
-            await sendSceneWithButtons(handler, channelId, scene.scene_text, scene.choices, scene.hint, userId, session.state);
+            await sendSceneWithButtons(handler, channelId, scene.scene_text, scene.choices, scene.hint, userId, session.state, imageUrl);
             
             // Update session
             updateSession(userId, { state: session.state, actionHistory: session.actionHistory });
@@ -261,8 +287,17 @@ bot.onTip(async (handler, event) => {
                 `---\n`
             );
             
+            // Generate image for the first scene (optional, won't break game if it fails)
+            let imageUrl: string | undefined = undefined;
+            try {
+                imageUrl = await generateSceneImage(scene.scene_text, 1, []) || undefined;
+            } catch (error) {
+                console.error('Error generating scene image:', error);
+                // Continue without image
+            }
+            
             // Send first scene with buttons (include updated state after scene generation)
-            await sendSceneWithButtons(handler, channelId, scene.scene_text, scene.choices, scene.hint, userId, session.state);
+            await sendSceneWithButtons(handler, channelId, scene.scene_text, scene.choices, scene.hint, userId, session.state, imageUrl);
             
             updateSession(userId, { state: session.state, actionHistory: session.actionHistory });
             console.log('Game started successfully for user:', userId, 'smart account:', senderAddress);
@@ -434,8 +469,17 @@ bot.onSlashCommand('start', async (handler, { channelId, userId }) => {
                 `---\n`
             );
             
+            // Generate image for the first scene (optional, won't break game if it fails)
+            let imageUrl: string | undefined = undefined;
+            try {
+                imageUrl = await generateSceneImage(scene.scene_text, 1, []) || undefined;
+            } catch (error) {
+                console.error('Error generating scene image:', error);
+                // Continue without image
+            }
+            
             // Send first scene with buttons (include updated state after scene generation)
-            await sendSceneWithButtons(handler, channelId, scene.scene_text, scene.choices, scene.hint, userId, session.state);
+            await sendSceneWithButtons(handler, channelId, scene.scene_text, scene.choices, scene.hint, userId, session.state, imageUrl);
         
         updateSession(userId, { state: session.state, actionHistory: session.actionHistory });
         console.log('Game started successfully for user:', userId);

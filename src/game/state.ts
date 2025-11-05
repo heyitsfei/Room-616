@@ -54,13 +54,38 @@ export function applyStateChanges(
         newState.time_remaining = Math.max(0, newState.time_remaining - 1);
     }
     
+    // SAFETY: Prevent game from ending before turn 10
+    // Force minimum values to keep game going
+    if (newState.turn < 10) {
+        // Ensure time_remaining is at least 1 before turn 10
+        if (newState.time_remaining <= 0) {
+            newState.time_remaining = 1;
+            console.warn(`Safety: Prevented time_remaining from reaching 0 at turn ${newState.turn}`);
+        }
+        // Ensure system_access is at most 2 before turn 10
+        if (newState.system_access >= 3) {
+            newState.system_access = 2;
+            console.warn(`Safety: Prevented system_access from reaching 3 at turn ${newState.turn}`);
+        }
+    }
+    
     return newState;
 }
 
 /**
  * Check if game should end
+ * Game must last at least 10 turns, but can end early if player makes catastrophic choice
  */
 export function shouldEndGame(state: PlayerState): boolean {
+    // Must have at least 10 turns
+    if (state.turn < 10) {
+        return false;
+    }
+    
+    // After turn 10, can end if:
+    // - Reached max turns (20)
+    // - Time ran out
+    // - Achieved full system access
     return (
         state.turn >= 20 ||
         state.time_remaining <= 0 ||

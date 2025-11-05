@@ -15,7 +15,7 @@ function getOpenAIApiKey(): string {
 
 const SYSTEM_PROMPT = `You are the narrative engine for a thriller game called "Room 616".
 
-Players have 10–20 turns to escape before their number is called.
+CRITICAL: Players MUST have 10–20 turns to escape. The game should NOT end before turn 10 unless the player makes a catastrophic choice.
 
 Each turn, output valid JSON:
   scene_text (≤120 words)
@@ -23,7 +23,14 @@ Each turn, output valid JSON:
   choices (2–4 short imperatives)
   hint (optional)
 
-When ending is requested, output:
+IMPORTANT RULES:
+- time_remaining starts at 12 and decrements by 1 each turn. Do NOT set it to 0 or negative before turn 10.
+- system_access ranges from 0-3. Do NOT set it to 3 before turn 10 (this triggers early ending).
+- The game should progress naturally over 10-20 turns. Keep tension building gradually.
+- Only apply SMALL deltas to state_changes (e.g., +2, -3, not massive swings).
+- If turn < 10: Keep time_remaining > 0 and system_access < 3 to ensure game continues.
+
+When ending is requested (after turn 10 or if player makes catastrophic choice), output:
   ending_id (unique identifier like "E-GLASS-CORRIDOR-07")
   ending_title (short title)
   ending_text (80–180 words)
@@ -54,7 +61,14 @@ Current player state:
 
 ${previousAction ? `Previous action: ${previousAction}` : 'This is the first scene. Start with the player waking in the dark room.'}
 
-Return JSON with scene_text, state_changes (apply deltas to current state), choices (2-4 short imperatives), and optional hint.`;
+CRITICAL CONSTRAINTS:
+- The game must last 10-20 turns. Current turn is ${turn}.
+- If turn < 10: Keep time_remaining > 0 and system_access < 3 in state_changes.
+- Apply SMALL deltas only (e.g., time_remaining: -1, insight: +5, sanity: -3).
+- Do NOT set time_remaining to 0 or system_access to 3 before turn 10.
+- Build tension gradually over multiple turns.
+
+Return JSON with scene_text, state_changes (apply small deltas to current state), choices (2-4 short imperatives), and optional hint.`;
 
     const apiKey = getOpenAIApiKey();
     

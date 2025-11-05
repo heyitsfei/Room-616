@@ -13,6 +13,7 @@ import commands from './commands'
 import { generateScene, generateEnding } from './game/gpt'
 import { applyStateChanges, shouldEndGame } from './game/state'
 import { createEndingResult } from './game/scoring'
+import type { PlayerState } from './game/types'
 import {
     getSession,
     createSession,
@@ -41,7 +42,8 @@ async function sendSceneWithButtons(
     sceneText: string,
     choices: string[],
     hint?: string,
-    userId?: string
+    userId?: string,
+    playerState?: PlayerState
 ): Promise<void> {
     // Create button components
     const buttonComponents: PlainMessage<InteractionRequest_Form_Component>[] = choices.map((choice, index) => 
@@ -56,12 +58,21 @@ async function sendSceneWithButtons(
         })
     );
 
+    // Build subtitle with stats and hint
+    let subtitleParts: string[] = [];
+    if (playerState) {
+        subtitleParts.push(formatStatsCompact(playerState));
+    }
+    if (hint) {
+        subtitleParts.push(`💡 Hint: ${hint}`);
+    }
+
     // Create the form
     const formId = `scene-${Date.now()}-${Math.random().toString(36).substring(7)}`;
     const form: PlainMessage<InteractionRequest_Form> = create(InteractionRequest_FormSchema, {
         id: formId,
         title: sceneText,
-        subtitle: hint ? `💡 Hint: ${hint}` : undefined,
+        subtitle: subtitleParts.length > 0 ? subtitleParts.join('\n\n') : undefined,
         components: buttonComponents,
     });
 
@@ -74,8 +85,11 @@ async function sendSceneWithButtons(
     } as any);
 
     // Store the mapping for handling responses
+    // Store by both formId and eventId to handle different response formats
     if (userId) {
         interactionRequestMap.set(formId, { userId, choices });
+        interactionRequestMap.set(eventId, { userId, choices }); // Also store by eventId as fallback
+        console.log('Stored interaction mapping:', { formId, eventId, userId, choicesCount: choices.length });
     }
 }
 
@@ -104,6 +118,13 @@ function formatStatus(session: NonNullable<ReturnType<typeof getSession>>): stri
         `💡 Insight: ${state.insight}\n` +
         `🔐 System Access: ${state.system_access}/3\n` +
         `⚖️ Morality: ${state.morality}\n`;
+}
+
+/**
+ * Format player stats compactly for scene display
+ */
+function formatStatsCompact(state: PlayerState): string {
+    return `Turn ${state.turn}/20 | ⏰${state.time_remaining} | 🤝${state.trust} | 🧠${state.sanity} | 💡${state.insight} | 🔐${state.system_access}/3 | ⚖️${state.morality}`;
 }
 
 /**
@@ -165,8 +186,8 @@ async function processTurn(
             clearSession(userId);
             lastChoices.delete(userId);
         } else {
-            // Send scene with buttons
-            await sendSceneWithButtons(handler, channelId, scene.scene_text, scene.choices, scene.hint, userId);
+            // Send scene with buttons (include updated state after scene generation)
+            await sendSceneWithButtons(handler, channelId, scene.scene_text, scene.choices, scene.hint, userId, session.state);
             
             // Update session
             updateSession(userId, { state: session.state, actionHistory: session.actionHistory });
@@ -237,13 +258,13 @@ bot.onTip(async (handler, event) => {
             await handler.sendMessage(
                 channelId,
                 `🎮 **Welcome to Room 616**\n\n` +
-                `You've entered the game with a tip of ${amount.toString()} wei.\n` +
-                `Navigate through 10-20 decisions to escape before your number is called...\n\n` +
+                `You've entered the game with a tip of ${amount.toString()} wei.\n\n` +
+                `You wake up chained to a chair in a pitch-black hotel room number 616. A flickering CRT TV turns on, showing live footage of other people in identical rooms — all with a number ending in 16. Every hour, one of the rooms goes dark permanently and you hear a scream. Escape before your room number is called.\n\n` +
                 `---\n`
             );
             
-            // Send first scene with buttons
-            await sendSceneWithButtons(handler, channelId, scene.scene_text, scene.choices, scene.hint, userId);
+            // Send first scene with buttons (include updated state after scene generation)
+            await sendSceneWithButtons(handler, channelId, scene.scene_text, scene.choices, scene.hint, userId, session.state);
             
             updateSession(userId, { state: session.state, actionHistory: session.actionHistory });
             console.log('Game started successfully for user:', userId, 'smart account:', senderAddress);
@@ -291,13 +312,32 @@ bot.onInteractionResponse(async (handler, event) => {
         const formResponse = payload.content.value;
         const requestId = formResponse.requestId;
         
-        console.log('Form response requestId:', requestId);
-        console.log('Available requestIds in map:', Array.from(interactionRequestMap.keys()));
+        console.log('Form response received:', {
+            requestId,
+            userId,
+            componentsCount: formResponse.components.length,
+            availableKeys: Array.from(interactionRequestMap.keys()).slice(0, 10), // First 10 for logging
+        });
         
         // Find the interaction request in our map
-        const interactionData = interactionRequestMap.get(requestId);
+        // Try requestId first (form's id), then check if it's an eventId
+        let interactionData = interactionRequestMap.get(requestId);
+        
+        // If not found, try looking up by partial match (in case of format differences)
+        if (!interactionData) {
+            // Try to find by matching formId pattern or eventId
+            for (const [key, value] of interactionRequestMap.entries()) {
+                if (key.includes(requestId) || requestId.includes(key)) {
+                    interactionData = value;
+                    console.log('Found interaction data by partial match:', { key, requestId });
+                    break;
+                }
+            }
+        }
+        
         if (!interactionData) {
             console.log('Interaction request not found for requestId:', requestId);
+            console.log('Full map contents:', Array.from(interactionRequestMap.entries()).map(([k, v]) => ({ key: k, userId: v.userId })));
             await handler.sendMessage(channelId, `❌ Could not find interaction data. Please try using /choose commands instead.`);
             return;
         }
@@ -389,13 +429,13 @@ bot.onSlashCommand('start', async (handler, { channelId, userId }) => {
             await handler.sendMessage(
                 channelId,
                 `🎮 **Welcome to Room 616**\n\n` +
-                `Navigate through 10-20 decisions to escape before your number is called...\n\n` +
+                `You wake up chained to a chair in a pitch-black hotel room number 616. A flickering CRT TV turns on, showing live footage of other people in identical rooms — all with a number ending in 16. Every hour, one of the rooms goes dark permanently and you hear a scream. Escape before your room number is called.\n\n` +
                 `💡 Tip: You can tip the bot to add to the prize pool! The highest score wins all tips.\n\n` +
                 `---\n`
             );
             
-            // Send first scene with buttons
-            await sendSceneWithButtons(handler, channelId, scene.scene_text, scene.choices, scene.hint, userId);
+            // Send first scene with buttons (include updated state after scene generation)
+            await sendSceneWithButtons(handler, channelId, scene.scene_text, scene.choices, scene.hint, userId, session.state);
         
         updateSession(userId, { state: session.state, actionHistory: session.actionHistory });
         console.log('Game started successfully for user:', userId);
